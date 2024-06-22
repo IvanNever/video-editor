@@ -5,6 +5,9 @@ const { pipeline } = require("node:stream/promises");
 const util = require("../../lib/util");
 const DB = require("../DB");
 const FF = require("../../lib/FF");
+const JobQueue = require("../../lib/JobQueue");
+
+const jobs = new JobQueue();
 
 const getVideos = (req, res, handleErr) => {
   DB.update();
@@ -85,10 +88,10 @@ const extractAudio = async (req, res, handleErr) => {
     });
   }
 
-  try {
-    const originalVideoPath = `./storage/${videoId}/original.${video.extension}`;
-    const targetAudioPath = `./storage/${videoId}/audio.aac`;
+  const originalVideoPath = `./storage/${videoId}/original.${video.extension}`;
+  const targetAudioPath = `./storage/${videoId}/audio.aac`;
 
+  try {
     await FF.extractAudio(originalVideoPath, targetAudioPath);
 
     video.extractedAudio = true;
@@ -102,6 +105,30 @@ const extractAudio = async (req, res, handleErr) => {
     util.deleteFile(targetAudioPath);
     return handleErr(err);
   }
+};
+
+const resizeVideo = async (req, res, handleErr) => {
+  const videoId = req.body.videoId;
+  const width = Number(req.body.width);
+  const height = Number(req.body.height);
+
+  DB.update();
+  const video = DB.videos.find((video) => video.videoId === videoId);
+
+  video.resizes[`${width}x${height}`] = { processing: true };
+  DB.save();
+
+  jobs.enqueue({
+    type: "resize",
+    videoId,
+    width,
+    height,
+  });
+
+  res.status(200).json({
+    status: "success",
+    message: "The video is now being processed!",
+  });
 };
 
 const getVideoAsset = async (req, res, handleErr) => {
@@ -134,18 +161,18 @@ const getVideoAsset = async (req, res, handleErr) => {
       filename = `${video.name}-audio.aac`;
       break;
     case "resize":
-      const dimansions = res.params.get("dimensions");
+      const dimensions = req.params.get("dimensions");
       file = await fs.open(
-        `./storage/${videoId}/${dimansions}.${video.extension}`,
-        "r"
+        `./storage/${videoId}/${dimensions}.${video.extension}`,
+        "r",
       );
       mimeType = "video/mp4";
-      filename = `${video.name}-${dimansions}.${video.extension}`;
+      filename = `${video.name}-${dimensions}.${video.extension}`;
       break;
     case "original":
       file = await fs.open(
         `./storage/${videoId}/original.${video.extension}`,
-        "r"
+        "r",
       );
       mimeType = "video/mp4";
       filename = `${video.name}.${video.extension}`;
@@ -177,6 +204,7 @@ const controller = {
   getVideos,
   extractAudio,
   getVideoAsset,
+  resizeVideo,
 };
 
 module.exports = controller;
